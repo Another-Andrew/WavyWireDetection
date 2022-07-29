@@ -56,7 +56,7 @@ File dataLog;
 #define sampleSize 100
 #define fileName "datalog.csv"
 
-File myFile;                      // Generic file object for writing to microSD card
+File logFile;                      // Generic file object for writing to microSD card
 // char fileName[] = "datalog.csv";  // Filename for csv file
 
 // ADC objects
@@ -66,99 +66,112 @@ volatile bool drdyIntrFlag = false;
 
 // Helper functions for ADC
 void drdyInterruptHndlr(){
-  drdyIntrFlag = true;
+    drdyIntrFlag = true;
 }
 void enableInterruptPin() {
-  attachInterrupt(digitalPinToInterrupt(ADS1220_DRDY_PIN), drdyInterruptHndlr, FALLING);
+    attachInterrupt(digitalPinToInterrupt(ADS1220_DRDY_PIN), drdyInterruptHndlr, FALLING);
 }
 
 // Sets the chip select pin to high. This disables the modules
 void disableModules() {
-  // digitalWrite(ADS1220_CS_PIN, HIGH);
-  digitalWrite(SD_CS_PIN, HIGH); // Disable SD card r/w SPI bus
+    // digitalWrite(ADS1220_CS_PIN, HIGH);
+    digitalWrite(SD_CS_PIN, HIGH); // Disable SD card r/w SPI bus
 }
 
 // Setup function that runs once when the microcontroller is first powered on.
 void setup() {
-  disableModules();  
-  // Open serial interface with a BAUD rate of 57600
-  Serial.begin(57600);
-  
-  writeSD(recordData());
-
+    disableModules();  
+    // Open serial interface with a BAUD rate of 57600
+    Serial.begin(57600);
+    writeSD(recordData());
 }
 
 void loop() {}
 
 float *recordData() {
-  static float samples[sampleSize];
+    // Array to store all the samples. Has to be static because a pointer will be passed between functions to access this array. 
+    static float samples[sampleSize];
 
-  pc_ads1220.begin(ADS1220_CS_PIN, ADS1220_DRDY_PIN);  // Begin SPI communication with adc.
-  pc_ads1220.set_data_rate(DR_330SPS);  // Sets sampling rate. Valid options are listed at the bottom. 
-  pc_ads1220.set_pga_gain(PGA_GAIN_32); // Sets the gain of the built-in lna.
-  pc_ads1220.select_mux_channels(MUX_AIN0_AIN1);  // Configure for differential measurement between AIN0 and AIN1
-  pc_ads1220.Start_Conv();  // Start continuous conversion mode
-  enableInterruptPin();
+    // Initialize connection with adc
+    pc_ads1220.begin(ADS1220_CS_PIN, ADS1220_DRDY_PIN);  // Begin SPI communication with adc.
+    pc_ads1220.set_data_rate(DR_330SPS);  // Sets sampling rate. Valid options are listed at the bottom. 
+    pc_ads1220.set_pga_gain(PGA_GAIN_32); // Sets the gain of the built-in lna.
+    pc_ads1220.select_mux_channels(MUX_AIN0_AIN1);  // Configure for differential measurement between AIN0 and AIN1
+    pc_ads1220.Start_Conv();  // Start continuous conversion mode
+    enableInterruptPin();
 
-  // For sampleSize. Loop, but don't increment i unless a successful sample has occured. 
-  for (int i = 0; i < sampleSize;) {
-    // Once Data-Ready flag is true
-    if (drdyIntrFlag) {
-      drdyIntrFlag = false;
-      adc_data = pc_ads1220.Read_Data_Samples();
-      samples[i] = (float) ((adc_data*VFSR*1000)/FSR);     //In  mV
-      i++;
+    // For sampleSize. Loop, but don't increment i unless a successful sample has been read. 
+    for (int i = 0; i < sampleSize;) {
+        // Once Data-Ready flag is true
+        if (drdyIntrFlag) {
+            drdyIntrFlag = false;
+            adc_data = pc_ads1220.Read_Data_Samples();
+            samples[i] = (float) ((adc_data*VFSR*1000)/FSR);     //In  mV
+            i++;
+        }
     }
-  }
   
-  return samples;
+    // Returns a pointer to the samples array. 
+    return samples;
 }
 
+// Writes data to the SD card. Takes pointer to an array of samples. 
 int writeSD(float *samples) {
   
-  // Shutdown the ADC to address the SD card reader
-  pc_ads1220.SPI_Command(2);
-  digitalWrite(49, HIGH);
-  digitalWrite(48, LOW);
+    // Shutdown the ADC to address the SD card reader through SPI interface.
+    pc_ads1220.SPI_Command(2);
+    digitalWrite(ADS1220_CS_PIN, HIGH);
+    digitalWrite(SD_CS_PIN, LOW);
 
-  if (!SD.begin(SD_CS_PIN)) {
-    Serial.println("initialization failed!");
-    return 1;
-  }
-
-  String dataString = "";
-  for (int i = 0; i < sampleSize; i++) {
-    dataString += String(samples[i]);
-    if (i != (sampleSize-1)) {
-      dataString += ",";
+    if (!SD.begin(SD_CS_PIN)) {
+        Serial.println("initialization failed!");
+        return 1;
     }
-  }
 
-  Serial.println("initialization done.");
-  if (SD.exists(fileName)) {
-    Serial.println("File already exists, overwritting data.");
+    // Constructs single string, separated by commas, out of array of floats.
+    String dataString = "";
+    for (int i = 0; i < sampleSize; i++) {
+        dataString += String(samples[i]);
+        if (i != (sampleSize-1)) {
+            dataString += ",";
+        }
+    }
 
-  } else {
+    // If file doesn't exist, create it. Then print data to text file. 
+    Serial.println("initialization done.");
+    if (SD.exists(fileName)) {
+        Serial.println("File already exists, overwritting data.");
+
+    } else {
+
     Serial.println("File does not exist, making it.");
-    myFile = SD.open(fileName, FILE_WRITE);
-    myFile.close();
-    
-  }
+        logFile = SD.open(fileName, FILE_WRITE);
+        logFile.close();
+    }
 
-  File dataFile = SD.open(fileName, FILE_WRITE);
-  delay(200);
-  if (dataFile.println(dataString) >= 1) {
-    Serial.println("Successfully wrote to SD card. ");
-  } else {
-    Serial.println("No data was written.");
-  }
+    logFile = SD.open(fileName, FILE_WRITE);
+    delay(200);
+    if (logFile.println(dataString) >= 1) {
+        Serial.println("Successfully wrote to SD card. ");
+    } else {
+        Serial.println("No data was written.");
+    }
+
+    delay(100);
+    logFile.close();
+    // Serial.println(dataString);
+    Serial.println("All done!");
+    while(1);
   
-  delay(100);
-  dataFile.close();
-  // Serial.println(dataString);
-  Serial.println("All done!");
-  while(1);
-  
+}
+
+int largestValue(float *data) {
+    for (int i=1; i<(sizeof(data)/sizeof(float)); ) {
+        if (data[i] > data[i-1]) {
+            
+        }
+
+    }
 }
 
   // Enable ADC
@@ -224,4 +237,16 @@ Gain Mode Registers:
 7. Close file and pull SD-CS pin up to disable the module. 
 8. Check if desired samples has been reached (Whole logic loop in while loop?)
 
+*/
+
+/*
+Include path
+    C:\Program Files (x86)\Arduino\hardware\arduino\avr\cores\arduino
+    C:\Program Files (x86)\Arduino\hardware\arduino\avr\variants\mega
+    C:\Users\Andrew\Documents\Arduino\libraries\ProtoCentral_ADS1220_24-bit_ADC_Library\src
+    C:\Program Files (x86)\Arduino\hardware\arduino\avr\libraries\SPI\src
+    C:\Program Files (x86)\Arduino\libraries\SD\src
+    c:\program files (x86)\arduino\hardware\tools\avr\lib\gcc\avr\7.3.0\include
+    c:\program files (x86)\arduino\hardware\tools\avr\lib\gcc\avr\7.3.0\include-fixed
+    c:\program files (x86)\arduino\hardware\tools\avr\avr\include
 */
